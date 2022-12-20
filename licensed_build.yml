@@ -1,0 +1,69 @@
+version: 0.2
+
+env:
+  shell: bash 
+  parameter-store:
+    ssh_key: id_rsa
+    
+
+phases:
+  install:
+   commands:
+      - sudo apt update
+      - sudo apt install curl -y 
+      - sudo apt install python3.8 -y
+      - python --version
+      - sudo apt install zip pigz unzip -y 
+      - curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+      - unzip awscliv2.zip
+      - sudo ./aws/install  
+      - export PATH=/usr/local/bin:$PATH
+      
+   
+       
+  pre_build:
+    commands:   
+      - mkdir -p ~/.ssh
+      - echo "$ssh_key" > ~/.ssh/id_rsa   
+      - chmod 600 ~/.ssh/id_rsa
+      - GIT_SSH_COMMAND="ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
+      - git clone git@bitbucket.org:moovita/build_creds.git
+      - cd ./build_creds
+      - . credentials.sh
+      - cd ..
+      
+      
+  build:
+    on-failure: ABORT
+    commands:
+      - . release-config.sh   
+      - if [ -z $MOO_CORE_REPO ]; then exit 1; fi
+      - GIT_SSH_COMMAND="ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
+      - ": ${MOO_DRIVERS_TAG:=master}"
+      - git clone -b "${MOO_DRIVERS_TAG}" --single-branch git@bitbucket.org:moovita/drivers.git
+      - ": ${MOO_CORE_TAG:=master}"
+      - git clone -b "${MOO_CORE_TAG}" --single-branch --recurse-submodules git@bitbucket.org:moovita/${MOO_CORE_REPO}.git
+      - ": ${MOO_CONFIG_TAG:=master}"
+      - git clone -b "${MOO_CONFIG_TAG}" --single-branch git@bitbucket.org:moovita/config.git
+      - ": ${MOO_MAP_TAG:=master}"
+      - git clone -b "${MOO_MAP_TAG}" --single-branch git@bitbucket.org:moovita/map.git
+      - git clone -b master --single-branch git@bitbucket.org:moovita/license-manager.git  
+      - cd "./license-manager"
+      - ./setenv-dev.sh
+      - cd "../${MOO_CORE_REPO}"
+      - SHA="$(git rev-parse --short HEAD)"
+      - . setup.sh -y -p 
+      - ./setup.sh -y -s
+      - cd "../drivers"
+      - ./compile.sh "${MOO_DRIVERS[@]}"
+      - cd ".."
+      - mkdir -p "./$MOO_PACKAGE/logs" 
+      - mv ./config "./$MOO_PACKAGE"
+      - mv ./map "./$MOO_PACKAGE"
+      - mv "./$MOO_CORE_REPO/bin" "./$MOO_PACKAGE/mooav"
+      - mv ./drivers/bin "./$MOO_PACKAGE/drivers"
+      - chmod -R 777 ./$MOO_PACKAGE
+      - export PACKAGE_NAME=${MOO_RELEASE_BRANCH}-${MOO_CORE_REPO}_${MOO_CORE_TAG}_${SHA}_$(env TZ=Singapore date +%Y-%m-%d_%H-%M)
+      - tar -zcvf $PACKAGE_NAME.tar $MOO_PACKAGE
+      - chmod -R 777 $PACKAGE_NAME.tar
+      - aws s3 cp $PACKAGE_NAME.tar  s3://aws-artifacts/Licensed/$(date +"%d-%m-%Y")/$PACKAGE_NAME.tar --profile lyvecloud --endpoint-url=https://s3.us-east-1.lyvecloud.seagate.com

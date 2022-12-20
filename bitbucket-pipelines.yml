@@ -1,0 +1,126 @@
+image:
+  name: jerryhoe/mooavbuild:v1.6.4
+  username: $DOCKER_HUB_USERNAME
+  password: $DOCKER_HUB_PASSWORD
+
+definitions: 
+  steps:
+    - step: &release-package
+        name: Package all Repositories for Release
+        size: 2x  # use 8GB memory for this step
+        script:
+          - . release-config.sh
+          - '[ -z $MOO_CORE_REPO ] && exit 1'
+          - ": ${MOO_DRIVERS_TAG:=master}"
+          - git clone -b "${MOO_DRIVERS_TAG}" --single-branch "git@bitbucket.org:moovita/drivers.git"
+          - ": ${MOO_CORE_TAG:=master}"
+          - git clone -b "${MOO_CORE_TAG}" --single-branch --recurse-submodules "git@bitbucket.org:moovita/${MOO_CORE_REPO}.git"
+          - ": ${MOO_CONFIG_TAG:=master}"
+          - git clone -b "${MOO_CONFIG_TAG}" --single-branch "git@bitbucket.org:moovita/config.git"
+          - ": ${MOO_MAP_TAG:=master}"
+          - git clone -b "${MOO_MAP_TAG}" --single-branch "git@bitbucket.org:moovita/map.git"          
+          - cd "${BITBUCKET_CLONE_DIR}/${MOO_CORE_REPO}"
+          - SHA="$(git rev-parse --short HEAD)"
+          - . setup.sh -y -c
+          - ./setup.sh -y -s
+          - cd "${BITBUCKET_CLONE_DIR}/drivers"
+          - ./compile.sh "${MOO_DRIVERS[@]}"
+          - cd "${BITBUCKET_CLONE_DIR}"
+          - mkdir -p "./$MOO_PACKAGE/logs" 
+          - mv ./config "./$MOO_PACKAGE"
+          - mv ./map "./$MOO_PACKAGE"
+          - mv "./$MOO_CORE_REPO/bin" "./$MOO_PACKAGE/mooav"
+          - mv ./drivers/bin "./$MOO_PACKAGE/drivers"
+          - BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+          - echo "${BITBUCKET_REPO_SLUG}_${BRANCH}-${MOO_CORE_REPO}_${MOO_CORE_TAG}_${SHA}.tar.gz" > archive.name
+          - tar -czvf "$(cat archive.name)" "./$MOO_PACKAGE"
+          - rclone copy "$(cat archive.name)" remote:Downloads
+          - echo "$(rclone link remote:Downloads/$(cat archive.name) 2>/dev/null)" > gdrive.link
+        artifacts:
+          - archive.name
+          #- "*.tar.gz"
+          - gdrive.link   
+    - step: &release-package-licensed
+        name: Package all Repositories for Release
+        size: 2x  # use 8GB memory for this step
+        script:
+          - . release-config.sh
+          - '[ -z $MOO_CORE_REPO ] && exit 1'
+          - ": ${MOO_DRIVERS_TAG:=master}"
+          - git clone -b "${MOO_DRIVERS_TAG}" --single-branch "git@bitbucket.org:moovita/drivers.git"
+          - ": ${MOO_CORE_TAG:=master}"
+          - git clone -b "${MOO_CORE_TAG}" --single-branch --recurse-submodules "git@bitbucket.org:moovita/${MOO_CORE_REPO}.git"
+          - ": ${MOO_CONFIG_TAG:=master}"
+          - git clone -b "${MOO_CONFIG_TAG}" --single-branch "git@bitbucket.org:moovita/config.git"
+          - ": ${MOO_MAP_TAG:=master}"
+          - git clone -b "${MOO_MAP_TAG}" --single-branch "git@bitbucket.org:moovita/map.git"
+          - git clone -b master --single-branch "git@bitbucket.org:moovita/license-manager.git"
+          - cd "${BITBUCKET_CLONE_DIR}/license-manager"
+          - ./setenv-dev.sh
+          - cd "${BITBUCKET_CLONE_DIR}/${MOO_CORE_REPO}"
+          - SHA="$(git rev-parse --short HEAD)"
+          - . setup.sh -y -p 
+          - ./setup.sh -y -s
+          - cd "${BITBUCKET_CLONE_DIR}/drivers"
+          - ./compile.sh "${MOO_DRIVERS[@]}"
+          - cd "${BITBUCKET_CLONE_DIR}"
+          - mkdir -p "./$MOO_PACKAGE/logs" 
+          - mv ./config "./$MOO_PACKAGE"
+          - mv ./map "./$MOO_PACKAGE"
+          - mv "./$MOO_CORE_REPO/bin" "./$MOO_PACKAGE/mooav"
+          - mv ./drivers/bin "./$MOO_PACKAGE/drivers"
+          - BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+          - echo "${BITBUCKET_REPO_SLUG}_${BRANCH}-${MOO_CORE_REPO}_${MOO_CORE_TAG}_${SHA}_LICENSED.tar.gz" > archive.name
+          - tar -czvf "$(cat archive.name)" "./$MOO_PACKAGE"
+          - rclone copy "$(cat archive.name)" remote:Downloads
+          - echo "$(rclone link remote:Downloads/$(cat archive.name) 2>/dev/null)" > gdrive.link
+        artifacts:
+          - archive.name
+          #- "*.tar.gz"
+          - gdrive.link   
+    - step: &deploy-gdrive
+        name: Deploy through Google Drive
+        script:
+          - archive_name=$(cat archive.name)
+          - rclone copy "$archive_name" remote:Downloads/
+          - echo "$(rclone link remote:Downloads/$archive_name 2>/dev/null)" > gdrive.link
+        artifacts:
+          - gdrive.link   
+    - step: &deploy-bb                
+        name: Deploy through Bitbucket Downloads
+        script:        
+          - pipe: atlassian/bitbucket-upload-file:0.1.1
+            variables:
+              BITBUCKET_USERNAME: $BB_USERNAME
+              BITBUCKET_APP_PASSWORD: $BB_APP_PASSWORD
+              FILENAME: "$(cat archive.name)"
+    - step: &email-notify
+        name: Send Notification Email
+        script:
+          - pipe: atlassian/email-notify:0.4.5
+            variables: &email-variables
+              USERNAME: $FROM_EMAIL_ADDRESS
+              PASSWORD: $EMAIL_HOST_PASSWORD
+              FROM: $FROM_EMAIL_ADDRESS
+              TO: $TO_EMAIL_ADDRESSES
+              HOST: 'smtp.gmail.com'
+              SUBJECT: "Release Package Generated - GDrive/$(cat archive.name)"
+              BODY_PLAIN: "Please click  <a href='$(cat gdrive.link)'>here</a> to download.<br><br>This is a system generated message. Please do not reply."
+          
+pipelines:                                            
+  custom:
+    mooav-release:
+      - step: *release-package
+      #- step: *deploy-gdrive
+      - step: *email-notify
+      #- step:
+      #    <<: *email-notify
+      #    script:
+      #      - pipe: atlassian/email-notify:0.4.5
+      #        variables:
+      #          <<: *email-variables
+      #          SUBJECT: "Release Package Generated - GDrive/$(cat archive.name)"
+      #          BODY_PLAIN: "Please click  <a href='$(cat gdrive.link)'>here</a> to download.<br><br>This is a system generated message. Please do not reply."
+    mooav-release-licensed:
+      - step: *release-package-licensed
+      - step: *email-notify

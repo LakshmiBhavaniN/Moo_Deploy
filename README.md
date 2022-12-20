@@ -1,0 +1,1 @@
+**For more information, please refer to the following [Confluence guide](https://moovitasg.atlassian.net/wiki/spaces/MOF/pages/789577743/Bitbucket+Pipeline+Support+for+Alpha+Black+Box+Test#MooRelease:-Binary-Package-Generation-Pipeline).**
